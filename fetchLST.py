@@ -13,13 +13,13 @@ def fetch_lst(lat: float, lon: float):
     point   = ee.Geometry.Point(lon, lat)
     region  = point.buffer(10_000).bounds()          # radius 10 km → 20 km square
     today   = datetime.utcnow().date()
-    start   = today - timedelta(days=30)
+    start   = today - timedelta(days=90)
 
     coll = (
         ee.ImageCollection("LANDSAT/LC09/C02/T1_L2")
         .filterDate(str(start), str(today))
         .filterBounds(region)
-        .filter(ee.Filter.lt("CLOUD_COVER", 10))
+        .filter(ee.Filter.lt("CLOUD_COVER", 20))
         .select("ST_B10")                            # LST band in Kelvin × 0.00341802 + 149
         .map(lambda img: (
             img.multiply(0.00341802)
