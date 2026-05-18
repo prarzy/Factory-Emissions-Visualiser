@@ -1,12 +1,23 @@
 import folium
+import numpy as np
+
+
+def _cluster_color(mean_z: float):
+    """Map a mean Z‑score to a CSS colour string."""
+    if mean_z >= 3.0:
+        return "#dc2626"  # red
+    if mean_z >= 2.5:
+        return "#ea580c"  # orange
+    return "#ca8a04"  # yellow
 
 
 def create_map(
     lat: float,
     lon: float,
     tile_layers: list | None = None,
+    clusters: list | None = None,
 ):
-    """Build a Folium map with toggleable GEE raster tile layers.
+    """Build a Folium map with GEE tile layers and cluster hotspots.
 
     Parameters
     ----------
@@ -14,11 +25,14 @@ def create_map(
         Each dict must contain ``url`` (GEE tile URL), ``name`` (display
         label), ``opacity`` (0–1), and ``show`` (bool).  Designed to
         accept the output of ``raster_layers.build_layer_entry``.
+    clusters : list of dict, optional
+        Output of ``clustering.cluster_anomalies``.  Each cluster is
+        drawn as a coloured circle whose radius is proportional to its
+        area, and a centroid marker.
     """
     m = folium.Map(location=[lat, lon], zoom_start=12, control_scale=True)
 
     # ----- Raster tile layers -----
-    # Layers are added in order so the last-added draws on top.
     if tile_layers:
         for entry in tile_layers:
             folium.TileLayer(
@@ -31,7 +45,46 @@ def create_map(
                 control=True,
             ).add_to(m)
 
-    # ----- Factory marker (always on top) -----
+    # ----- Thermal cluster overlays -----
+    if clusters:
+        # Group cluster circles under a single toggleable FeatureGroup
+        fg = folium.FeatureGroup(name="Hotspot Clusters", show=True, control=True).add_to(m)
+
+        for c in clusters:
+            color = _cluster_color(c["mean_z_score"])
+
+            # Approximate circle radius (metres) from area_km²
+            radius_m = max(80, int(np.sqrt(c["area_km2"] / np.pi) * 1000))
+
+            tooltip = (
+                f"Cluster #{c['cluster_id']}  |  "
+                f"{c['size']} px  |  "
+                f"Z\u0304 = {c['mean_z_score']:.1f}  |  "
+                f"{c['area_km2']:.2f} km\u00b2"
+            )
+
+            # Fill circle (semi‑transparent, proportional to area)
+            folium.Circle(
+                location=[c["centroid_lat"], c["centroid_lon"]],
+                radius=radius_m,
+                color=color,
+                fill=True,
+                fill_opacity=0.25,
+                weight=1.5,
+                tooltip=tooltip,
+            ).add_to(fg)
+
+            # Centroid dot
+            folium.CircleMarker(
+                location=[c["centroid_lat"], c["centroid_lon"]],
+                radius=5,
+                color=color,
+                fill=True,
+                fill_opacity=0.9,
+                weight=1,
+            ).add_to(fg)
+
+    # ----- Factory location marker (always on top) -----
     folium.Marker(
         [lat, lon],
         tooltip="Factory Location",

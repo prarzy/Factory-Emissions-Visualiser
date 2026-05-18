@@ -3,6 +3,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from services.analytics.temporal import detect_temporal_anomalies, calculate_emission_score
+from services.analytics.clustering import cluster_anomalies
 from services.gee_sources.sentinel5p import fetch_all_pollutants, build_pollutant_tile_layers
 from services.visualization.folium_map import create_map
 
@@ -492,6 +493,12 @@ if st.session_state.show_analysis:
                     st.session_state.lat, st.session_state.lon
                 )
 
+            with st.spinner("Clustering thermal hotspots..."):
+                clusters, _cluster_labels = cluster_anomalies(
+                    lst_array, anomaly_indices, z_score_map,
+                    st.session_state.lat, st.session_state.lon,
+                )
+
             # Combine all tile layers: temporal first, then pollutant.
             all_tiles = temporal_tiles + pollutant_tiles
 
@@ -504,6 +511,7 @@ if st.session_state.show_analysis:
                 'z_score_map': z_score_map,
                 's5p_data': s5p_data,
                 'tile_layers': all_tiles,
+                'clusters': clusters,
                 'error': None
             }
             st.success("Analysis complete!")
@@ -523,6 +531,7 @@ if st.session_state.show_analysis:
         z_score_map = results.get('z_score_map')
         s5p_data = results.get('s5p_data')
         tile_layers = results.get('tile_layers')
+        clusters = results.get('clusters')
 
         col_map, col_metrics = st.columns([3, 1], gap="large")
 
@@ -530,6 +539,7 @@ if st.session_state.show_analysis:
             m = create_map(
                 st.session_state.lat, st.session_state.lon,
                 tile_layers=tile_layers,
+                clusters=clusters,
             )
             st_folium(m, width=1100, height=600)
 
@@ -545,6 +555,19 @@ if st.session_state.show_analysis:
             st.metric("Min LST (C)", f"{np.nanmin(lst_array):.2f}")
             st.metric("Mean LST (C)", f"{np.nanmean(lst_array):.2f}")
             st.metric("Emission Score", f"{calculate_emission_score(lst_array, anomaly_indices, z_score_map):.2f}")
+
+            if clusters:
+                st.markdown("""
+                <div style="padding-top: 24px; padding-bottom: 8px;">
+                    <h3 style='color: #8a9a8a; font-size: 11px; margin: 0; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: "JetBrains Mono", monospace;'>Hotspot Clusters</h3>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.metric("Total hotspots", len(clusters))
+                top = clusters[0]
+                st.metric("Largest cluster", f"{top['size']} px", help=f"Z̅={top['mean_z_score']} · {top['area_km2']} km²")
+                total_area = sum(c['area_km2'] for c in clusters)
+                st.metric("Combined area", f"{total_area:.2f} km²")
 
             if s5p_data:
                 st.markdown("""
