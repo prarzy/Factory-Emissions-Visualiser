@@ -2,8 +2,7 @@ import numpy as np
 import streamlit as st
 from streamlit_folium import st_folium
 
-from services.gee_sources.landsat import fetch_lst
-from services.analytics.clustering import analyze_anomalies, calculate_emission_score
+from services.analytics.temporal import detect_temporal_anomalies, calculate_emission_score
 from services.visualization.folium_map import create_map
 
 # Initialize session state
@@ -479,11 +478,10 @@ if st.session_state.show_analysis:
     
     if needs_analysis:
         try:
-            with st.spinner("Fetching LST data from Google Earth Engine..."):
-                npy_url = fetch_lst(st.session_state.lat, st.session_state.lon)
-
-            with st.spinner("Detecting temperature anomalies..."):
-                lst_array, anomaly_indices = analyze_anomalies(npy_url)
+            with st.spinner("Computing temporal anomalies (GEE climatology)..."):
+                lst_array, anomaly_indices, z_score_map = detect_temporal_anomalies(
+                    st.session_state.lat, st.session_state.lon
+                )
 
             # Cache results
             st.session_state.analysis_results = {
@@ -491,6 +489,7 @@ if st.session_state.show_analysis:
                 'lon': st.session_state.lon,
                 'lst_array': lst_array,
                 'anomaly_indices': anomaly_indices,
+                'z_score_map': z_score_map,
                 'error': None
             }
             st.success("Analysis complete!")
@@ -507,7 +506,8 @@ if st.session_state.show_analysis:
         results = st.session_state.analysis_results
         lst_array = results['lst_array']
         anomaly_indices = results['anomaly_indices']
-        
+        z_score_map = results.get('z_score_map')
+
         col_map, col_metrics = st.columns([3, 1], gap="large")
 
         with col_map:
@@ -520,9 +520,9 @@ if st.session_state.show_analysis:
                 <h3 style='color: #6b8f5e; font-size: 16px; margin: 0; font-weight: 600; letter-spacing: -0.2px; font-family: "DM Sans", sans-serif;'>Results</h3>
             </div>
             """, unsafe_allow_html=True)
-            
+
             st.metric("Anomaly pixels", len(anomaly_indices))
             st.metric("Max LST (C)", f"{np.nanmax(lst_array):.2f}")
             st.metric("Min LST (C)", f"{np.nanmin(lst_array):.2f}")
             st.metric("Mean LST (C)", f"{np.nanmean(lst_array):.2f}")
-            st.metric("Emission Score", f"{calculate_emission_score(lst_array, anomaly_indices):.2f}")
+            st.metric("Emission Score", f"{calculate_emission_score(lst_array, anomaly_indices, z_score_map):.2f}")
