@@ -61,10 +61,29 @@ def _get_month_range(year: int, month: int):
     return start, date(year, month + 1, 1) - timedelta(days=1)
 
 
+def _industrial_index_stats(image_with_indices, mask, region):
+    """Return ``(ndvi_mean, ndbi_mean)`` over the masked industrial area
+    for the confidence scoring system."""
+    combined = ee.Image.cat([
+        image_with_indices.select("NDVI").updateMask(mask),
+        image_with_indices.select("NDBI").updateMask(mask),
+    ])
+    stats = combined.reduceRegion(
+        reducer=ee.Reducer.mean(),
+        geometry=region,
+        scale=100,
+        maxPixels=1e9,
+    )
+    return stats.get("NDVI").getInfo(), stats.get("NDBI").getInfo()
+
+
 def _compute_anomaly_images(lat: float, lon: float):
     """Core GEE computation — return ee.Images for current LST, Z‑score,
     and anomaly flag.  Shared by the download path (metrics) and the
-    tile path (map rendering)."""
+    tile path (map rendering).
+
+    Also returns mean NDVI / NDBI over the industrial footprint for
+    the confidence scoring system."""
     ensure_ee_initialized()
 
     point = ee.Geometry.Point(lon, lat)
@@ -75,7 +94,15 @@ def _compute_anomaly_images(lat: float, lon: float):
     cur_coll = _build_collection(today - timedelta(days=90), today, region)
     if cur_coll.size().getInfo() == 0:
         raise RuntimeError("No cloud‑free Landsat 9 scenes in the last 90 days.")
-    current_lst = _apply_industrial_mask(cur_coll.median())
+
+    # Compute industrially‑masked LST plus mean NDVI / NDBI over those
+    # same industrial pixels (used downstream by the fusion confidence scorer).
+    current_median = cur_coll.median()
+    current_median = compute_ndbi(compute_ndvi(current_median))
+    ind_mask = create_industrial_mask(current_median)
+    current_lst = current_median.select("LST_Celsius").updateMask(ind_mask)
+
+    ndvi_mean, ndbi_mean = _industrial_index_stats(current_median, ind_mask, region)
 
     # ----- historical composites (same month, previous 5 years) -----
     historical_lst = []
@@ -106,7 +133,7 @@ def _compute_anomaly_images(lat: float, lon: float):
 
     anomaly_flag = z_score.gt(2)
 
-    return current_lst, z_score, anomaly_flag, region
+    return current_lst, z_score, anomaly_flag, region, ndvi_mean, ndbi_mean
 
 
 # ---------------------------------------------------------------------------
@@ -121,10 +148,13 @@ def detect_temporal_anomalies(lat: float, lon: float):
     lst_array : np.ndarray  —  current LST (°C) of industrial pixels
     anomaly_indices : np.ndarray  —  raveled indices where Z > 2
     z_score_map : np.ndarray  —  Z‑score for every industrial pixel
-    tile_layers : list[dict]  —  Folium tile layer descriptors for
-        (1) LST, (2) Z‑score, (3) anomaly flag overlay.
+    tile_layers : list[dict]  —  Folium tile layer descriptors
+    ndvi_mean : float  —  mean NDVI over the industrial footprint
+    ndbi_mean : float  —  mean NDBI over the industrial footprint
     """
-    current_lst, z_score, anomaly_flag, region = _compute_anomaly_images(lat, lon)
+    # pylint: disable=unbalanced-tuple-unpacking
+    r = _compute_anomaly_images(lat, lon)
+    current_lst, z_score, anomaly_flag, region, ndvi_mean, ndbi_mean = r
 
     # ---- tile layers (native GEE map tiles, no matplotlib) ----
     tile_layers = [
@@ -155,7 +185,7 @@ def detect_temporal_anomalies(lat: float, lon: float):
     anomaly_mask = data[:, :, 2] > 0.5
     anomaly_indices = np.where(anomaly_mask.ravel())[0]
 
-    return lst_array, anomaly_indices, z_score_map, tile_layers
+    return lst_array, anomaly_indices, z_score_map, tile_layers, ndvi_mean, ndbi_mean
 
 
 def build_temporal_tile_layers(lat: float, lon: float):
@@ -165,7 +195,7 @@ def build_temporal_tile_layers(lat: float, lon: float):
     Each entry follows the shape produced by
     ``raster_layers.build_layer_entry``.
     """
-    current_lst, z_score, anomaly_flag, _region = _compute_anomaly_images(lat, lon)
+    current_lst, z_score, anomaly_flag, _region, *_ = _compute_anomaly_images(lat, lon)
 
     return [
         build_layer_entry(current_lst, LST_VIS,
@@ -177,47 +207,4 @@ def build_temporal_tile_layers(lat: float, lon: float):
     ]
 
 
-def calculate_emission_score(lst_array, anomaly_indices, z_score_map=None):
-    """Emission score (0–100) based on Z‑score severity.
 
-    Uses Z‑scores when available (new flow); falls back to pure
-    temperature‑based severity when called with legacy cached results.
-
-    With Z‑scores:
-        severity  = clamp((mean(Z[anomalies]) - 2) / 3,  0, 1)
-    Fallback severity:
-        severity  = clamp((T_anomaly - T_mean) / T_range,  0, 1)
-
-    density   = |anomalies| / |valid industrial pixels|
-    score     = (0.7 · severity  +  0.3 · density) × 100
-    """
-    flat = lst_array.ravel()
-
-    if len(anomaly_indices) == 0:
-        return 0.0
-
-    anomaly_values = flat[anomaly_indices]
-    anomaly_values = anomaly_values[~np.isnan(anomaly_values)]
-
-    if anomaly_values.size == 0:
-        return 0.0
-
-    all_valid = flat[~np.isnan(flat)]
-    density = len(anomaly_values) / len(all_valid) if len(all_valid) > 0 else 0
-
-    if z_score_map is not None:
-        flat_z = z_score_map.ravel()
-        anomaly_z = flat_z[anomaly_indices]
-        anomaly_z = anomaly_z[~np.isnan(anomaly_z)]
-        if anomaly_z.size > 0:
-            severity = np.clip((anomaly_z.mean() - 2.0) / 3.0, 0, 1)
-        else:
-            severity = 0.0
-    else:
-        temp_range = all_valid.max() - all_valid.min()
-        if temp_range == 0:
-            return 0.0
-        mean_temp = all_valid.mean()
-        severity = np.clip((anomaly_values.mean() - mean_temp) / temp_range, 0, 1)
-
-    return round((0.7 * severity + 0.3 * density) * 100, 2)

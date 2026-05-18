@@ -32,13 +32,15 @@ services/
 ├── gee_sources/
 │   ├── landsat.py            → Landsat 9 LST retrieval via GEE
 │   └── sentinel5p.py         → NO₂ / SO₂ / CO column density (≈7 km res.)
-├── analytics/temporal.py     → Z‑score climatology anomaly detection
+├── analytics/
+│   ├── temporal.py            → Z‑score climatology anomaly detection
+│   └── fusion.py              → Multi‑signal weighted confidence scoring
 └── visualization/
     ├── raster_layers.py      → GEE tile URL helpers + vis param presets
     └── folium_map.py         → Folium map with TileLayer + LayerControl
 ```
 
-Flow: user enters lat/lon → `temporal.detect_temporal_anomalies` queries GEE for current LST (last 90 days, Landsat 9) and historical monthly composites (5 previous years, Landsat 8+9), computes per-pixel Z = (current − hist_mean) / hist_std, flags Z > 2 as anomalies → `sentinel5p.fetch_all_pollutants` fetches NO₂/SO₂/CO rasters at native S5P resolution (~7 km, coarser than Landsat) → `folium_map.create_map` uses GEE native `TileLayer` tiles (via `raster_layers.build_layer_entry`) with `LayerControl` toggles → `app.py` displays map + metrics.
+Flow: user enters lat/lon → `temporal.detect_temporal_anomalies` queries GEE for current LST (last 90 days, Landsat 9) and historical monthly composites (5 previous years, Landsat 8+9), computes per-pixel Z = (current − hist_mean) / hist_std, flags Z > 2 as anomalies, also returns mean NDVI/NDBI over industrial footprint → `sentinel5p.fetch_all_pollutants` fetches NO₂/SO₂/CO rasters at native S5P resolution (~7 km) → `clustering.cluster_anomalies` groups anomalous pixels with DBSCAN → `fusion.calculate_emission_score` combines thermal, atmospheric, spectral, and cluster signals into weighted 0–100 confidence score + Low/Medium/High category → `folium_map.create_map` uses GEE native `TileLayer` tiles (via `raster_layers.build_layer_entry`) with `LayerControl` toggles → `app.py` displays map + metrics.
 
 ## Key Constraints
 

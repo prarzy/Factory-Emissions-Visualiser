@@ -2,7 +2,8 @@ import numpy as np
 import streamlit as st
 from streamlit_folium import st_folium
 
-from services.analytics.temporal import detect_temporal_anomalies, calculate_emission_score
+from services.analytics.temporal import detect_temporal_anomalies
+from services.analytics.fusion import calculate_emission_score
 from services.analytics.clustering import cluster_anomalies
 from services.gee_sources.sentinel5p import fetch_all_pollutants, build_pollutant_tile_layers
 from services.visualization.folium_map import create_map
@@ -481,7 +482,7 @@ if st.session_state.show_analysis:
     if needs_analysis:
         try:
             with st.spinner("Computing temporal anomalies (GEE climatology)..."):
-                lst_array, anomaly_indices, z_score_map, temporal_tiles = (
+                lst_array, anomaly_indices, z_score_map, temporal_tiles, ndvi_mean, ndbi_mean = (
                     detect_temporal_anomalies(st.session_state.lat, st.session_state.lon)
                 )
 
@@ -512,6 +513,8 @@ if st.session_state.show_analysis:
                 's5p_data': s5p_data,
                 'tile_layers': all_tiles,
                 'clusters': clusters,
+                'ndvi_mean': ndvi_mean,
+                'ndbi_mean': ndbi_mean,
                 'error': None
             }
             st.success("Analysis complete!")
@@ -532,6 +535,8 @@ if st.session_state.show_analysis:
         s5p_data = results.get('s5p_data')
         tile_layers = results.get('tile_layers')
         clusters = results.get('clusters')
+        ndvi_mean = results.get('ndvi_mean')
+        ndbi_mean = results.get('ndbi_mean')
 
         col_map, col_metrics = st.columns([3, 1], gap="large")
 
@@ -554,7 +559,19 @@ if st.session_state.show_analysis:
             st.metric("Max LST (C)", f"{np.nanmax(lst_array):.2f}")
             st.metric("Min LST (C)", f"{np.nanmin(lst_array):.2f}")
             st.metric("Mean LST (C)", f"{np.nanmean(lst_array):.2f}")
-            st.metric("Emission Score", f"{calculate_emission_score(lst_array, anomaly_indices, z_score_map):.2f}")
+            score, category = calculate_emission_score(
+                z_score_map=z_score_map,
+                anomaly_indices=anomaly_indices,
+                s5p_data=s5p_data,
+                clusters=clusters,
+                ndvi_mean=ndvi_mean,
+                ndbi_mean=ndbi_mean,
+            )
+            st.metric(
+                "Emission Score",
+                value=f"{score:.1f}",
+                delta=category,
+            )
 
             if clusters:
                 st.markdown("""
