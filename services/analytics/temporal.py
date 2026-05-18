@@ -7,10 +7,13 @@ import requests
 
 from services.gee_sources.indices import compute_ndvi, compute_ndbi, create_industrial_mask
 from services.utils.gee_auth import ensure_ee_initialized
+from services.visualization.raster_layers import (
+    LST_VIS, ZSCORE_VIS, ANOMALY_VIS, build_layer_entry,
+)
 
 
 # ---------------------------------------------------------------------------
-# GEE helpers
+# GEE helpers (shared between download & tile paths)
 # ---------------------------------------------------------------------------
 
 def _add_lst_celsius(img: ee.Image) -> ee.Image:
@@ -58,28 +61,10 @@ def _get_month_range(year: int, month: int):
     return start, date(year, month + 1, 1) - timedelta(days=1)
 
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-def detect_temporal_anomalies(lat: float, lon: float):
-    """Detect thermal anomalies via Z-scores against a 5‑year climatology.
-
-    For every pixel:
-      1. Retrieve the **current** LST composite (median of the last 90
-         days of Landsat 9, masked to industrial areas).
-      2. Retrieve **historical** annual composites (same calendar month,
-         previous 5 years, Landsat 8+9 merged, independently masked).
-      3. Compute the per‑pixel historical mean and standard deviation.
-      4. Z = (current – historical_mean) / historical_std.
-      5. Anomalies are pixels where *Z > 2*.
-
-    Returns
-    -------
-    lst_array : np.ndarray  —  current LST (°C) of industrial pixels
-    anomaly_indices : np.ndarray  —  raveled indices where Z > 2
-    z_score_map : np.ndarray  —  Z‑score for every industrial pixel
-    """
+def _compute_anomaly_images(lat: float, lon: float):
+    """Core GEE computation — return ee.Images for current LST, Z‑score,
+    and anomaly flag.  Shared by the download path (metrics) and the
+    tile path (map rendering)."""
     ensure_ee_initialized()
 
     point = ee.Geometry.Point(lon, lat)
@@ -97,11 +82,9 @@ def detect_temporal_anomalies(lat: float, lon: float):
     for offset in range(1, 6):
         yr = today.year - offset
         start, end = _get_month_range(yr, today.month)
-        # include_l8=True so earlier years (pre‑L9) are covered
         coll = _build_collection(start, end, region, include_l8=True)
         if coll.size().getInfo() > 0:
             historical_lst.append(coll.median())
-        # years without any cloud‑free scenes are silently skipped
 
     if len(historical_lst) < 2:
         raise RuntimeError(
@@ -109,11 +92,8 @@ def detect_temporal_anomalies(lat: float, lon: float):
             f"composites for month {today.month}, got {len(historical_lst)}."
         )
 
-    # Apply the same industrial mask independently to each historical year
-    # so we compare industrial-to-industrial temperatures over time.
     masked_hist = [_apply_industrial_mask(img) for img in historical_lst]
 
-    # Per‑pixel mean & standard deviation across the available years
     hist_stack = ee.Image.cat(
         [img.rename(f"y{i}") for i, img in enumerate(masked_hist)]
     )
@@ -126,7 +106,37 @@ def detect_temporal_anomalies(lat: float, lon: float):
 
     anomaly_flag = z_score.gt(2)
 
-    # Bundle into a single 3‑band NPY for one network round‑trip
+    return current_lst, z_score, anomaly_flag, region
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def detect_temporal_anomalies(lat: float, lon: float):
+    """Detect thermal anomalies via Z-scores.
+
+    Returns
+    -------
+    lst_array : np.ndarray  —  current LST (°C) of industrial pixels
+    anomaly_indices : np.ndarray  —  raveled indices where Z > 2
+    z_score_map : np.ndarray  —  Z‑score for every industrial pixel
+    tile_layers : list[dict]  —  Folium tile layer descriptors for
+        (1) LST, (2) Z‑score, (3) anomaly flag overlay.
+    """
+    current_lst, z_score, anomaly_flag, region = _compute_anomaly_images(lat, lon)
+
+    # ---- tile layers (native GEE map tiles, no matplotlib) ----
+    tile_layers = [
+        build_layer_entry(current_lst, LST_VIS,
+                          "Land Surface Temperature", opacity=0.55),
+        build_layer_entry(z_score, ZSCORE_VIS,
+                          "Z-Score (Thermal Anomaly)", opacity=0.50),
+        build_layer_entry(anomaly_flag, ANOMALY_VIS,
+                          "Anomaly Flag (Z>2)", opacity=0.45, show=False),
+    ]
+
+    # ---- array download for metrics ----
     output = ee.Image.cat([current_lst, z_score, anomaly_flag])
     output = output.rename(["LST", "Z_Score", "Anomaly"])
 
@@ -136,12 +146,6 @@ def detect_temporal_anomalies(lat: float, lon: float):
         "format": "NPY",
     })
 
-    # ----- download & unpack -----
-    # Performance: the GEE server does all aggregation server‑side.
-    # The biggest cost is waiting for *six* image collections to be
-    # evaluated (1 current + up to 5 historical).  For a given (lat, lon,
-    # month) the historical mean / std change only once per year and could
-    # be cached with st.cache_data in the caller along with the location.
     resp = requests.get(url, timeout=120)
     resp.raise_for_status()
     data = np.load(io.BytesIO(resp.content))
@@ -151,7 +155,26 @@ def detect_temporal_anomalies(lat: float, lon: float):
     anomaly_mask = data[:, :, 2] > 0.5
     anomaly_indices = np.where(anomaly_mask.ravel())[0]
 
-    return lst_array, anomaly_indices, z_score_map
+    return lst_array, anomaly_indices, z_score_map, tile_layers
+
+
+def build_temporal_tile_layers(lat: float, lon: float):
+    """Return Folium tile layer descriptors for the LST heatmap, Z‑score,
+    and anomaly overlay.
+
+    Each entry follows the shape produced by
+    ``raster_layers.build_layer_entry``.
+    """
+    current_lst, z_score, anomaly_flag, _region = _compute_anomaly_images(lat, lon)
+
+    return [
+        build_layer_entry(current_lst, LST_VIS,
+                          "Land Surface Temperature", opacity=0.55),
+        build_layer_entry(z_score, ZSCORE_VIS,
+                          "Z-Score (Thermal Anomaly)", opacity=0.50),
+        build_layer_entry(anomaly_flag, ANOMALY_VIS,
+                          "Anomaly Flag (Z>2)", opacity=0.45, show=False),
+    ]
 
 
 def calculate_emission_score(lst_array, anomaly_indices, z_score_map=None):
@@ -187,12 +210,10 @@ def calculate_emission_score(lst_array, anomaly_indices, z_score_map=None):
         anomaly_z = flat_z[anomaly_indices]
         anomaly_z = anomaly_z[~np.isnan(anomaly_z)]
         if anomaly_z.size > 0:
-            # Z=2 is threshold → severity 0 at Z=2, 1 at Z=5
             severity = np.clip((anomaly_z.mean() - 2.0) / 3.0, 0, 1)
         else:
             severity = 0.0
     else:
-        # Fallback: temperature-based severity from LST (°C)
         temp_range = all_valid.max() - all_valid.min()
         if temp_range == 0:
             return 0.0

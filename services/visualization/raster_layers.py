@@ -1,52 +1,89 @@
-import base64
-import matplotlib.pyplot as plt
-import numpy as np
-from io import BytesIO
+"""Reusable helpers for GEE tile URL generation and visualisation presets.
+
+Replaces the former matplotlib‑based PNG overlay system with native
+Earth Engine map tiles, providing proper geographic alignment.
+"""
 
 
-def render_lst_heatmap(lst_array: np.ndarray,
-                       anomaly_indices: np.ndarray | list[int] | None = None):
-    fig, ax = plt.subplots(figsize=(5, 5), dpi=100)
-    ax.axis('off')
-    ax.imshow(lst_array, cmap='hot', vmin=np.nanmin(lst_array),
-              vmax=np.nanmax(lst_array))
+# ---------------------------------------------------------------------------
+# Visualisation parameter presets for each layer type
+# ---------------------------------------------------------------------------
 
-    if anomaly_indices is not None and len(anomaly_indices):
-        yy, xx = np.unravel_index(anomaly_indices, lst_array.shape)
-        ax.scatter(xx, yy, s=6, alpha=0.6, linewidths=0,
-                   marker='o', edgecolors='none', c='cyan')
+LST_VIS = {
+    "min": 20,
+    "max": 45,
+    "palette": ["#000000", "#8b0000", "#ff4500", "#ffd700", "#ffffff"],
+}
 
-    buf = BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-    plt.close(fig)
-    encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{encoded}"
+# Z-score (signed diverging palette — blue=cold, red=hot)
+ZSCORE_VIS = {
+    "min": -3,
+    "max": 3,
+    "palette": ["#0000ff", "#ffffff", "#ff0000"],
+}
+
+# Anomaly flag (binary highlight)
+ANOMALY_VIS = {
+    "min": 0,
+    "max": 3,
+    "palette": ["#000000", "#00ffff"],
+}
+
+NO2_VIS = {
+    "min": 0,
+    "max": 0.00015,
+    "palette": ["#0000ff", "#00ff00", "#ffff00", "#ff0000"],
+}
+
+SO2_VIS = {
+    "min": 0,
+    "max": 0.01,
+    "palette": ["#0000ff", "#00ffff", "#ffff00", "#ff0000"],
+}
+
+CO_VIS = {
+    "min": 0,
+    "max": 0.04,
+    "palette": ["#000000", "#0000ff", "#ff00ff", "#ffffff"],
+}
+
+POLLUTANT_VIS = {
+    "NO2": NO2_VIS,
+    "SO2": SO2_VIS,
+    "CO": CO_VIS,
+}
 
 
-def render_pollutant_layer(array: np.ndarray,
-                           cmap: str = 'viridis',
-                           vmin: float | None = None,
-                           vmax: float | None = None):
-    """Render a 2-D array as a colour‑mapped PNG with nearest‑neighbour
-    interpolation.
+# ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
 
-    Using ``interpolation='nearest'`` preserves the blocky pixel
-    appearance of coarse‑resolution sensors (e.g. Sentinel‑5P at
-    ~7 km / pixel) instead of smoothly interpolating to a higher
-    resolution that the sensor cannot actually provide.
+def get_ee_tile_url(image, vis_params):
+    """Get a GEE tile URL template for *image* with given *vis_params*.
+
+    The returned URL uses ``{z}/{x}/{y}`` placeholders suitable for
+    ``folium.TileLayer``.
     """
-    if vmin is None:
-        vmin = np.nanmin(array)
-    if vmax is None:
-        vmax = np.nanmax(array)
+    return image.getMapId(vis_params)["tiles_url"]
 
-    fig, ax = plt.subplots(figsize=(5, 5), dpi=100)
-    ax.axis('off')
-    ax.imshow(array, cmap=cmap, vmin=vmin, vmax=vmax,
-              interpolation='nearest')
 
-    buf = BytesIO()
-    plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0)
-    plt.close(fig)
-    encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
-    return f"data:image/png;base64,{encoded}"
+def build_layer_entry(image, vis_params, name, *, opacity=0.6, show=True):
+    """Create a tile layer descriptor from a GEE image.
+
+    Returns a dict::
+
+        {
+            "url":   "https://earthengine.../{z}/{x}/{y}",
+            "name":  "Land Surface Temperature",
+            "opacity": 0.6,
+            "show":  True,
+        }
+
+    Suitable for passing to ``folium_map.create_map``.
+    """
+    return {
+        "url": get_ee_tile_url(image, vis_params),
+        "name": name,
+        "opacity": opacity,
+        "show": show,
+    }

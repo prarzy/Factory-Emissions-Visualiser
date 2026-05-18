@@ -34,11 +34,11 @@ services/
 │   └── sentinel5p.py         → NO₂ / SO₂ / CO column density (≈7 km res.)
 ├── analytics/temporal.py     → Z‑score climatology anomaly detection
 └── visualization/
-    ├── raster_layers.py      → matplotlib heatmap PNG rendering
-    └── folium_map.py         → Folium map with ImageOverlay + marker
+    ├── raster_layers.py      → GEE tile URL helpers + vis param presets
+    └── folium_map.py         → Folium map with TileLayer + LayerControl
 ```
 
-Flow: user enters lat/lon → `temporal.detect_temporal_anomalies` queries GEE for current LST (last 90 days, Landsat 9) and historical monthly composites (5 previous years, Landsat 8+9), computes per-pixel Z = (current − hist_mean) / hist_std, flags Z > 2 as anomalies → `sentinel5p.fetch_all_pollutants` fetches NO₂/SO₂/CO rasters at native S5P resolution (~7 km, coarser than Landsat) → `folium_map.create_map` (via `raster_layers.render_lst_heatmap` + `render_pollutant_layer`) → `app.py` displays map + metrics.
+Flow: user enters lat/lon → `temporal.detect_temporal_anomalies` queries GEE for current LST (last 90 days, Landsat 9) and historical monthly composites (5 previous years, Landsat 8+9), computes per-pixel Z = (current − hist_mean) / hist_std, flags Z > 2 as anomalies → `sentinel5p.fetch_all_pollutants` fetches NO₂/SO₂/CO rasters at native S5P resolution (~7 km, coarser than Landsat) → `folium_map.create_map` uses GEE native `TileLayer` tiles (via `raster_layers.build_layer_entry`) with `LayerControl` toggles → `app.py` displays map + metrics.
 
 ## Key Constraints
 
@@ -46,5 +46,4 @@ Flow: user enters lat/lon → `temporal.detect_temporal_anomalies` queries GEE f
 - **Earth Engine auth** uses `key.json` (service account credentials). This file is in `.gitignore` and not tracked — if it's missing, the app won't start. Do not regenerate or rotate it without updating the GCP project (`careful-drummer-462304-u9`).
 - Default coordinates hardcoded in `app.py`: lat=20.9515, lon=85.2157 (Odisha industrial belt).
 - `earthengine-api` calls `ee.Initialize()` inside `detect_temporal_anomalies()`. In Streamlit's rerun-on-interaction model this runs on every script execution. `gee_auth._initialize_ee` is guarded by `st.cache_resource` so the init runs at most once per session.
-- Image overlay span is hardcoded to ±0.05 degrees in `folium_map.py`, approximating a 20km×20km bounding box but not a precise georeference.
 - `pandas` and `geemap` are listed in `requirements.txt` but **not used** in any source file — leftover dependencies.

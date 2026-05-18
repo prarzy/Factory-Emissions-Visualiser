@@ -3,7 +3,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from services.analytics.temporal import detect_temporal_anomalies, calculate_emission_score
-from services.gee_sources.sentinel5p import fetch_all_pollutants
+from services.gee_sources.sentinel5p import fetch_all_pollutants, build_pollutant_tile_layers
 from services.visualization.folium_map import create_map
 
 # Initialize session state
@@ -480,14 +480,20 @@ if st.session_state.show_analysis:
     if needs_analysis:
         try:
             with st.spinner("Computing temporal anomalies (GEE climatology)..."):
-                lst_array, anomaly_indices, z_score_map = detect_temporal_anomalies(
-                    st.session_state.lat, st.session_state.lon
+                lst_array, anomaly_indices, z_score_map, temporal_tiles = (
+                    detect_temporal_anomalies(st.session_state.lat, st.session_state.lon)
                 )
 
             with st.spinner("Fetching Sentinel-5P atmospheric data..."):
                 s5p_data = fetch_all_pollutants(
                     st.session_state.lat, st.session_state.lon
                 )
+                pollutant_tiles = build_pollutant_tile_layers(
+                    st.session_state.lat, st.session_state.lon
+                )
+
+            # Combine all tile layers: temporal first, then pollutant.
+            all_tiles = temporal_tiles + pollutant_tiles
 
             # Cache results
             st.session_state.analysis_results = {
@@ -497,6 +503,7 @@ if st.session_state.show_analysis:
                 'anomaly_indices': anomaly_indices,
                 'z_score_map': z_score_map,
                 's5p_data': s5p_data,
+                'tile_layers': all_tiles,
                 'error': None
             }
             st.success("Analysis complete!")
@@ -515,14 +522,14 @@ if st.session_state.show_analysis:
         anomaly_indices = results['anomaly_indices']
         z_score_map = results.get('z_score_map')
         s5p_data = results.get('s5p_data')
+        tile_layers = results.get('tile_layers')
 
         col_map, col_metrics = st.columns([3, 1], gap="large")
 
         with col_map:
             m = create_map(
                 st.session_state.lat, st.session_state.lon,
-                lst_array, anomaly_indices,
-                pollutants=s5p_data,
+                tile_layers=tile_layers,
             )
             st_folium(m, width=1100, height=600)
 
