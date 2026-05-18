@@ -36,7 +36,7 @@ services/
     └── folium_map.py         → Folium map with ImageOverlay + marker
 ```
 
-Flow: user enters lat/lon → `landsat.fetch_lst` (calls `gee_auth.ensure_ee_initialized` once via cache) → `clustering.analyze_anomalies` → `folium_map.create_map` (via `raster_layers.render_lst_heatmap`) → `app.py` displays result.
+Flow: user enters lat/lon → `landsat.fetch_lst` (calls `gee_auth.ensure_ee_initialized` once via cache; computes NDVI/NDBI from SR_B4/B5/B6, applies industrial mask selecting NDVI<0.3 & NDBI>0.2 before download) → `clustering.analyze_anomalies` → `folium_map.create_map` (via `raster_layers.render_lst_heatmap`) → `app.py` displays result.
 
 ## Key Constraints
 
