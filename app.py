@@ -3,6 +3,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 
 from services.analytics.temporal import detect_temporal_anomalies, calculate_emission_score
+from services.gee_sources.sentinel5p import fetch_all_pollutants
 from services.visualization.folium_map import create_map
 
 # Initialize session state
@@ -483,6 +484,11 @@ if st.session_state.show_analysis:
                     st.session_state.lat, st.session_state.lon
                 )
 
+            with st.spinner("Fetching Sentinel-5P atmospheric data..."):
+                s5p_data = fetch_all_pollutants(
+                    st.session_state.lat, st.session_state.lon
+                )
+
             # Cache results
             st.session_state.analysis_results = {
                 'lat': st.session_state.lat,
@@ -490,6 +496,7 @@ if st.session_state.show_analysis:
                 'lst_array': lst_array,
                 'anomaly_indices': anomaly_indices,
                 'z_score_map': z_score_map,
+                's5p_data': s5p_data,
                 'error': None
             }
             st.success("Analysis complete!")
@@ -507,11 +514,16 @@ if st.session_state.show_analysis:
         lst_array = results['lst_array']
         anomaly_indices = results['anomaly_indices']
         z_score_map = results.get('z_score_map')
+        s5p_data = results.get('s5p_data')
 
         col_map, col_metrics = st.columns([3, 1], gap="large")
 
         with col_map:
-            m = create_map(st.session_state.lat, st.session_state.lon, lst_array, anomaly_indices)
+            m = create_map(
+                st.session_state.lat, st.session_state.lon,
+                lst_array, anomaly_indices,
+                pollutants=s5p_data,
+            )
             st_folium(m, width=1100, height=600)
 
         with col_metrics:
@@ -526,3 +538,24 @@ if st.session_state.show_analysis:
             st.metric("Min LST (C)", f"{np.nanmin(lst_array):.2f}")
             st.metric("Mean LST (C)", f"{np.nanmean(lst_array):.2f}")
             st.metric("Emission Score", f"{calculate_emission_score(lst_array, anomaly_indices, z_score_map):.2f}")
+
+            if s5p_data:
+                st.markdown("""
+                <div style="padding-top: 24px; padding-bottom: 8px;">
+                    <h3 style='color: #8a9a8a; font-size: 11px; margin: 0; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: "JetBrains Mono", monospace;'>Atmospheric Composition</h3>
+                </div>
+                """, unsafe_allow_html=True)
+
+                for poll, data in s5p_data.items():
+                    mean_val = data['mean']
+                    st.metric(
+                        data['label'],
+                        f"{mean_val:.3e}",
+                        help=f"Mean column density · {data['unit']}",
+                    )
+
+                st.markdown("""
+                <div style="margin-top: 8px; font-size: 10px; color: #5a6a5a; font-family: 'JetBrains Mono', monospace;">
+                    Sentinel‑5P TROPOMI · ~7 km native resolution
+                </div>
+                """, unsafe_allow_html=True)

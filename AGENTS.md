@@ -29,14 +29,16 @@ Single-page Streamlit app with four service packages:
 app.py
 services/
 ├── utils/gee_auth.py        → `st.cache_resource`-guarded `ee.Initialize()`
-├── gee_sources/landsat.py    → Landsat 9 LST retrieval via GEE
+├── gee_sources/
+│   ├── landsat.py            → Landsat 9 LST retrieval via GEE
+│   └── sentinel5p.py         → NO₂ / SO₂ / CO column density (≈7 km res.)
 ├── analytics/temporal.py     → Z‑score climatology anomaly detection
 └── visualization/
     ├── raster_layers.py      → matplotlib heatmap PNG rendering
     └── folium_map.py         → Folium map with ImageOverlay + marker
 ```
 
-Flow: user enters lat/lon → `temporal.detect_temporal_anomalies` queries GEE for current LST (last 90 days, Landsat 9) and historical monthly composites (5 previous years, Landsat 8+9), computes per-pixel Z = (current − hist_mean) / hist_std, flags Z > 2 as anomalies → `folium_map.create_map` (via `raster_layers.render_lst_heatmap`) → `app.py` displays result.
+Flow: user enters lat/lon → `temporal.detect_temporal_anomalies` queries GEE for current LST (last 90 days, Landsat 9) and historical monthly composites (5 previous years, Landsat 8+9), computes per-pixel Z = (current − hist_mean) / hist_std, flags Z > 2 as anomalies → `sentinel5p.fetch_all_pollutants` fetches NO₂/SO₂/CO rasters at native S5P resolution (~7 km, coarser than Landsat) → `folium_map.create_map` (via `raster_layers.render_lst_heatmap` + `render_pollutant_layer`) → `app.py` displays map + metrics.
 
 ## Key Constraints
 
