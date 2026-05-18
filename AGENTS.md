@@ -1,0 +1,48 @@
+# AGENTS.md
+
+## Quickstart
+
+```bash
+# Activate venv (Python 3.12)
+source .venv/bin/activate
+
+# Install deps (UTF-16 LE encoding! convert first if needed)
+pip install -r requirements.txt
+
+# Run
+streamlit run app.py
+```
+
+## Encoding Gotcha
+
+`requirements.txt` is **UTF-16 LE encoded**. Standard `pip install -r requirements.txt` will fail with an encoding error. If you need to re-save it, convert to UTF-8 first:
+
+```bash
+python -c "open('requirements2.txt','w').write(open('requirements.txt',encoding='utf-16-le').read())" && mv requirements2.txt requirements.txt
+```
+
+## Architecture
+
+Single-page Streamlit app with four service packages:
+
+```
+app.py
+services/
+├── utils/gee_auth.py        → `st.cache_resource`-guarded `ee.Initialize()`
+├── gee_sources/landsat.py    → Landsat 9 LST retrieval via GEE
+├── analytics/clustering.py   → sklearn IsolationForest + emission scoring
+└── visualization/
+    ├── raster_layers.py      → matplotlib heatmap PNG rendering
+    └── folium_map.py         → Folium map with ImageOverlay + marker
+```
+
+Flow: user enters lat/lon → `landsat.fetch_lst` (calls `gee_auth.ensure_ee_initialized` once via cache) → `clustering.analyze_anomalies` → `folium_map.create_map` (via `raster_layers.render_lst_heatmap`) → `app.py` displays result.
+
+## Key Constraints
+
+- **No test, lint, build, or CI commands exist.** The only verification is running the app.
+- **Earth Engine auth** uses `key.json` (service account credentials). This file is in `.gitignore` and not tracked — if it's missing, the app won't start. Do not regenerate or rotate it without updating the GCP project (`careful-drummer-462304-u9`).
+- Default coordinates hardcoded in `app.py`: lat=20.9515, lon=85.2157 (Odisha industrial belt).
+- `earthengine-api` calls `ee.Initialize()` inside `fetch_lst()`. In Streamlit's rerun-on-interaction model this runs on every script execution. `gee_auth._initialize_ee` is guarded by `st.cache_resource` so the init runs at most once per session.
+- Image overlay span is hardcoded to ±0.05 degrees in `folium_map.py`, approximating a 20km×20km bounding box but not a precise georeference.
+- `pandas` and `geemap` are listed in `requirements.txt` but **not used** in any source file — leftover dependencies.

@@ -2,9 +2,9 @@ import numpy as np
 import streamlit as st
 from streamlit_folium import st_folium
 
-from fetchLST import fetch_lst
-from anomaly import analyze_anomalies, calculate_emission_score
-from folium_map import create_map
+from services.gee_sources.landsat import fetch_lst
+from services.analytics.clustering import analyze_anomalies, calculate_emission_score
+from services.visualization.folium_map import create_map
 
 # Initialize session state
 if "show_analysis" not in st.session_state:
