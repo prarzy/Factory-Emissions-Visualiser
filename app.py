@@ -377,6 +377,15 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    st.markdown("""
+    <div style="font-size: 10px; color: #5a6a5a; margin-bottom: 8px; line-height: 1.5; font-family: 'JetBrains Mono', monospace;">
+    Current LST is computed over this range and compared against the
+    <em>identical calendar dates</em> shifted back year‑by‑year across
+    the preceding 5 years.  (e.g. Mar&nbsp;1 – Jun&nbsp;1 → compared
+    against Mar&nbsp;1 – Jun&nbsp;1 in each prior year.)
+    </div>
+    """, unsafe_allow_html=True)
+
     default_end = datetime.now(timezone.utc).date()
     default_start = default_end - timedelta(days=90)
 
@@ -386,9 +395,19 @@ with st.sidebar:
     with col4:
         sel_end = st.date_input("To", value=default_end)
 
+    range_days = (sel_end - sel_start).days
+    range_valid = 1 <= range_days <= 365
+
+    if not range_valid:
+        if range_days < 1:
+            st.warning("End date must be after start date.")
+        else:
+            st.warning(f"Range is {range_days} days. Maximum allowed is 365 days (1 year).")
+
     st.markdown("---")
 
-    if st.button("RUN ANALYSIS", type="primary", use_container_width=True):
+    if st.button("RUN ANALYSIS", type="primary", use_container_width=True,
+                 disabled=not range_valid):
         st.session_state.show_analysis = True
         st.session_state.lat = lat
         st.session_state.lon = lon
