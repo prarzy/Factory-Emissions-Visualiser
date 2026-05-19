@@ -53,14 +53,6 @@ def _apply_industrial_mask(image: ee.Image) -> ee.Image:
     return image.select("LST_Celsius").updateMask(mask)
 
 
-def _get_month_range(year: int, month: int):
-    """Return ``(start_date, end_date)`` covering the whole month."""
-    start = date(year, month, 1)
-    if month == 12:
-        return start, date(year, 12, 31)
-    return start, date(year, month + 1, 1) - timedelta(days=1)
-
-
 def _industrial_index_stats(image_with_indices, mask, region):
     """Return ``(ndvi_mean, ndbi_mean)`` over the masked industrial area
     for the confidence scoring system."""
@@ -91,9 +83,10 @@ def _compute_anomaly_images(lat: float, lon: float,
     tile path (map rendering).
 
     *start_date* / *end_date* set the **current** analysis window
-    (default last 90 days).  The historical climatology is always
-    computed from the same calendar month as *end_date* across the
-    preceding 5 years.
+    (default last 90 days).  The historical climatology uses the
+    **identical date range** (same month/day) shifted back year‑by‑year
+    across the preceding 5 years, so the comparison is always
+    like‑with‑like.
 
     Also returns mean NDVI / NDBI over the industrial footprint for
     the confidence scoring system.
@@ -106,9 +99,7 @@ def _compute_anomaly_images(lat: float, lon: float,
     if start_date is None or end_date is None:
         start_date, end_date = _default_date_range()
 
-    ref_date = end_date  # reference point for historical month
-
-    # ----- current composite (selected window) -----
+    # ----- current composite (user‑selected window) -----
     cur_coll = _build_collection(start_date, end_date, region)
     if cur_coll.size().getInfo() == 0:
         raise RuntimeError(
@@ -122,19 +113,24 @@ def _compute_anomaly_images(lat: float, lon: float,
 
     ndvi_mean, ndbi_mean = _industrial_index_stats(current_median, ind_mask, region)
 
-    # ----- historical composites (same month as ref_date, previous 5 years) -----
+    # ----- historical composites (same day‑of‑year window, previous 5 years) -----
     historical_lst = []
     for offset in range(1, 6):
-        yr = ref_date.year - offset
-        start, end = _get_month_range(yr, ref_date.month)
-        coll = _build_collection(start, end, region, include_l8=True)
+        yr = end_date.year - offset
+        try:
+            hist_start = start_date.replace(year=yr)
+            hist_end = end_date.replace(year=yr)
+        except ValueError:
+            continue  # e.g. Feb 29 in a non‑leap year — skip
+        coll = _build_collection(hist_start, hist_end, region, include_l8=True)
         if coll.size().getInfo() > 0:
             historical_lst.append(coll.median())
 
     if len(historical_lst) < 2:
         raise RuntimeError(
             "Insufficient historical data: need ≥2 years of cloud‑free "
-            f"composites for month {ref_date.month}, got {len(historical_lst)}."
+            f"scenes for the period {start_date}–{end_date} (shifted back), "
+            f"got {len(historical_lst)}."
         )
 
     masked_hist = [_apply_industrial_mask(img) for img in historical_lst]
@@ -169,8 +165,10 @@ def detect_temporal_anomalies(lat: float, lon: float,
     Parameters
     ----------
     start_date, end_date :
-        Date range for the **current** analysis window.  Defaults to
-        the last 90 days when omitted.
+        Date range for the **current** analysis window.  The historical
+        climatology uses the **identical calendar dates** shifted back
+        year‑by‑year across the preceding 5 years, so the comparison is
+        always like‑with‑like.  Defaults to the last 90 days when omitted.
 
     Returns
     -------
