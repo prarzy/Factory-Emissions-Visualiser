@@ -1,5 +1,5 @@
 import io
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import ee
 import numpy as np
@@ -77,26 +77,44 @@ def _industrial_index_stats(image_with_indices, mask, region):
     return stats.get("NDVI").getInfo(), stats.get("NDBI").getInfo()
 
 
-def _compute_anomaly_images(lat: float, lon: float):
+def _default_date_range():
+    """Return ``(start_date, end_date)`` defaulting to the last 90 days."""
+    end = datetime.now(timezone.utc).date()
+    return end - timedelta(days=90), end
+
+
+def _compute_anomaly_images(lat: float, lon: float,
+                            start_date: date | None = None,
+                            end_date: date | None = None):
     """Core GEE computation — return ee.Images for current LST, Z‑score,
     and anomaly flag.  Shared by the download path (metrics) and the
     tile path (map rendering).
 
+    *start_date* / *end_date* set the **current** analysis window
+    (default last 90 days).  The historical climatology is always
+    computed from the same calendar month as *end_date* across the
+    preceding 5 years.
+
     Also returns mean NDVI / NDBI over the industrial footprint for
-    the confidence scoring system."""
+    the confidence scoring system.
+    """
     ensure_ee_initialized()
 
     point = ee.Geometry.Point(lon, lat)
     region = point.buffer(10_000).bounds()
-    today = datetime.utcnow().date()
 
-    # ----- current composite (last 90 days) -----
-    cur_coll = _build_collection(today - timedelta(days=90), today, region)
+    if start_date is None or end_date is None:
+        start_date, end_date = _default_date_range()
+
+    ref_date = end_date  # reference point for historical month
+
+    # ----- current composite (selected window) -----
+    cur_coll = _build_collection(start_date, end_date, region)
     if cur_coll.size().getInfo() == 0:
-        raise RuntimeError("No cloud‑free Landsat 9 scenes in the last 90 days.")
+        raise RuntimeError(
+            f"No cloud‑free Landsat scenes for {start_date} – {end_date}."
+        )
 
-    # Compute industrially‑masked LST plus mean NDVI / NDBI over those
-    # same industrial pixels (used downstream by the fusion confidence scorer).
     current_median = cur_coll.median()
     current_median = compute_ndbi(compute_ndvi(current_median))
     ind_mask = create_industrial_mask(current_median)
@@ -104,11 +122,11 @@ def _compute_anomaly_images(lat: float, lon: float):
 
     ndvi_mean, ndbi_mean = _industrial_index_stats(current_median, ind_mask, region)
 
-    # ----- historical composites (same month, previous 5 years) -----
+    # ----- historical composites (same month as ref_date, previous 5 years) -----
     historical_lst = []
     for offset in range(1, 6):
-        yr = today.year - offset
-        start, end = _get_month_range(yr, today.month)
+        yr = ref_date.year - offset
+        start, end = _get_month_range(yr, ref_date.month)
         coll = _build_collection(start, end, region, include_l8=True)
         if coll.size().getInfo() > 0:
             historical_lst.append(coll.median())
@@ -116,7 +134,7 @@ def _compute_anomaly_images(lat: float, lon: float):
     if len(historical_lst) < 2:
         raise RuntimeError(
             "Insufficient historical data: need ≥2 years of cloud‑free "
-            f"composites for month {today.month}, got {len(historical_lst)}."
+            f"composites for month {ref_date.month}, got {len(historical_lst)}."
         )
 
     masked_hist = [_apply_industrial_mask(img) for img in historical_lst]
@@ -140,8 +158,16 @@ def _compute_anomaly_images(lat: float, lon: float):
 # Public API
 # ---------------------------------------------------------------------------
 
-def detect_temporal_anomalies(lat: float, lon: float):
-    """Detect thermal anomalies via Z-scores.
+def detect_temporal_anomalies(lat: float, lon: float,
+                              start_date: date | None = None,
+                              end_date: date | None = None):
+    """Detect thermal anomalies via Z-scores for a configurable time window.
+
+    Parameters
+    ----------
+    start_date, end_date :
+        Date range for the **current** analysis window.  Defaults to
+        the last 90 days when omitted.
 
     Returns
     -------
@@ -152,11 +178,10 @@ def detect_temporal_anomalies(lat: float, lon: float):
     ndvi_mean : float  —  mean NDVI over the industrial footprint
     ndbi_mean : float  —  mean NDBI over the industrial footprint
     """
-    # pylint: disable=unbalanced-tuple-unpacking
-    r = _compute_anomaly_images(lat, lon)
+    r = _compute_anomaly_images(lat, lon, start_date, end_date)
     current_lst, z_score, anomaly_flag, region, ndvi_mean, ndbi_mean = r
 
-    # ---- tile layers (native GEE map tiles, no matplotlib) ----
+    # ---- tile layers ----
     tile_layers = [
         build_layer_entry(current_lst, LST_VIS,
                           "Land Surface Temperature", opacity=0.55),
@@ -188,14 +213,12 @@ def detect_temporal_anomalies(lat: float, lon: float):
     return lst_array, anomaly_indices, z_score_map, tile_layers, ndvi_mean, ndbi_mean
 
 
-def build_temporal_tile_layers(lat: float, lon: float):
-    """Return Folium tile layer descriptors for the LST heatmap, Z‑score,
-    and anomaly overlay.
-
-    Each entry follows the shape produced by
-    ``raster_layers.build_layer_entry``.
-    """
-    current_lst, z_score, anomaly_flag, _region, *_ = _compute_anomaly_images(lat, lon)
+def build_temporal_tile_layers(lat: float, lon: float,
+                               start_date: date | None = None,
+                               end_date: date | None = None):
+    """Return tile layer descriptors (no array download — for preview use)."""
+    r = _compute_anomaly_images(lat, lon, start_date, end_date)
+    current_lst, z_score, anomaly_flag = r[0], r[1], r[2]
 
     return [
         build_layer_entry(current_lst, LST_VIS,
@@ -205,6 +228,3 @@ def build_temporal_tile_layers(lat: float, lon: float):
         build_layer_entry(anomaly_flag, ANOMALY_VIS,
                           "Anomaly Flag (Z>2)", opacity=0.45, show=False),
     ]
-
-
-

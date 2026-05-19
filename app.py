@@ -1,5 +1,6 @@
 import numpy as np
 import streamlit as st
+from datetime import date, datetime, timedelta, timezone
 from streamlit_folium import st_folium
 
 from services.analytics.temporal import detect_temporal_anomalies
@@ -8,7 +9,44 @@ from services.analytics.clustering import cluster_anomalies
 from services.gee_sources.sentinel5p import fetch_all_pollutants, build_pollutant_tile_layers
 from services.visualization.folium_map import create_map
 
-# Initialize session state
+# ---------------------------------------------------------------------------
+# Cached analysis pipeline  (keyed on lat / lon / ISO dates)
+# ---------------------------------------------------------------------------
+
+@st.cache_data(ttl=3600)
+def _run_analysis(lat, lon, start_str, end_str):
+    """Execute the full pipeline once and cache the results.
+
+    Parameters are flat / hashable types so ``st.cache_data`` can
+    invalidate cleanly when the user changes the location or time
+    window.
+    """
+    s = date.fromisoformat(start_str)
+    e = date.fromisoformat(end_str)
+
+    lst_array, anomaly_indices, z_score_map, tiles, ndvi_mean, ndbi_mean = (
+        detect_temporal_anomalies(lat, lon, s, e)
+    )
+    s5p_data = fetch_all_pollutants(lat, lon, s, e)
+    pollutant_tiles = build_pollutant_tile_layers(lat, lon, s, e)
+    clusters, _ = cluster_anomalies(lst_array, anomaly_indices, z_score_map, lat, lon)
+
+    return {
+        "lst_array": lst_array,
+        "anomaly_indices": anomaly_indices,
+        "z_score_map": z_score_map,
+        "ndvi_mean": ndvi_mean,
+        "ndbi_mean": ndbi_mean,
+        "s5p_data": s5p_data,
+        "tile_layers": tiles + pollutant_tiles,
+        "clusters": clusters,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Session state
+# ---------------------------------------------------------------------------
+
 if "show_analysis" not in st.session_state:
     st.session_state.show_analysis = False
 if "analysis_results" not in st.session_state:
@@ -332,11 +370,30 @@ with st.sidebar:
                              help="Decimal degrees")
     
     st.markdown("---")
-    
+
+    st.markdown("""
+    <div style="padding: 4px 0 4px 0;">
+        <h3 style="color: #8a9a8a; margin: 0; font-size: 11px; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: 'JetBrains Mono', monospace;">Time Window</h3>
+    </div>
+    """, unsafe_allow_html=True)
+
+    default_end = datetime.now(timezone.utc).date()
+    default_start = default_end - timedelta(days=90)
+
+    col3, col4 = st.columns(2, gap="small")
+    with col3:
+        sel_start = st.date_input("From", value=default_start)
+    with col4:
+        sel_end = st.date_input("To", value=default_end)
+
+    st.markdown("---")
+
     if st.button("RUN ANALYSIS", type="primary", use_container_width=True):
         st.session_state.show_analysis = True
         st.session_state.lat = lat
         st.session_state.lon = lon
+        st.session_state.start_date = sel_start
+        st.session_state.end_date = sel_end
     
     st.markdown("---")
     
@@ -474,69 +531,52 @@ if not st.session_state.show_analysis:
 if st.session_state.show_analysis:
     # Check if we need to run analysis
     needs_analysis = (
-        st.session_state.analysis_results is None or
-        st.session_state.analysis_results.get('lat') != st.session_state.lat or
-        st.session_state.analysis_results.get('lon') != st.session_state.lon
+        st.session_state.analysis_results is None
+        or st.session_state.analysis_results.get('lat') != st.session_state.lat
+        or st.session_state.analysis_results.get('lon') != st.session_state.lon
+        or st.session_state.analysis_results.get('start_date') != st.session_state.start_date
+        or st.session_state.analysis_results.get('end_date') != st.session_state.end_date
     )
     
     if needs_analysis:
         try:
-            with st.spinner("Computing temporal anomalies (GEE climatology)..."):
-                lst_array, anomaly_indices, z_score_map, temporal_tiles, ndvi_mean, ndbi_mean = (
-                    detect_temporal_anomalies(st.session_state.lat, st.session_state.lon)
+            with st.spinner("Running analysis pipeline (GEE + S5P + clustering)..."):
+                results = _run_analysis(
+                    st.session_state.lat,
+                    st.session_state.lon,
+                    str(st.session_state.start_date),
+                    str(st.session_state.end_date),
                 )
-
-            with st.spinner("Fetching Sentinel-5P atmospheric data..."):
-                s5p_data = fetch_all_pollutants(
-                    st.session_state.lat, st.session_state.lon
-                )
-                pollutant_tiles = build_pollutant_tile_layers(
-                    st.session_state.lat, st.session_state.lon
-                )
-
-            with st.spinner("Clustering thermal hotspots..."):
-                clusters, _cluster_labels = cluster_anomalies(
-                    lst_array, anomaly_indices, z_score_map,
-                    st.session_state.lat, st.session_state.lon,
-                )
-
-            # Combine all tile layers: temporal first, then pollutant.
-            all_tiles = temporal_tiles + pollutant_tiles
-
-            # Cache results
-            st.session_state.analysis_results = {
+            results.update({
                 'lat': st.session_state.lat,
                 'lon': st.session_state.lon,
-                'lst_array': lst_array,
-                'anomaly_indices': anomaly_indices,
-                'z_score_map': z_score_map,
-                's5p_data': s5p_data,
-                'tile_layers': all_tiles,
-                'clusters': clusters,
-                'ndvi_mean': ndvi_mean,
-                'ndbi_mean': ndbi_mean,
-                'error': None
-            }
+                'start_date': st.session_state.start_date,
+                'end_date': st.session_state.end_date,
+                'error': None,
+            })
+            st.session_state.analysis_results = results
             st.success("Analysis complete!")
         except Exception as e:
             st.session_state.analysis_results = {
                 'lat': st.session_state.lat,
                 'lon': st.session_state.lon,
-                'error': str(e)
+                'start_date': st.session_state.start_date,
+                'end_date': st.session_state.end_date,
+                'error': str(e),
             }
             st.error(f"**Error:** {e}")
     
     # Display results from cache
     if st.session_state.analysis_results and not st.session_state.analysis_results.get('error'):
-        results = st.session_state.analysis_results
-        lst_array = results['lst_array']
-        anomaly_indices = results['anomaly_indices']
-        z_score_map = results.get('z_score_map')
-        s5p_data = results.get('s5p_data')
-        tile_layers = results.get('tile_layers')
-        clusters = results.get('clusters')
-        ndvi_mean = results.get('ndvi_mean')
-        ndbi_mean = results.get('ndbi_mean')
+        r = st.session_state.analysis_results
+        lst_array = r["lst_array"]
+        anomaly_indices = r["anomaly_indices"]
+        z_score_map = r["z_score_map"]
+        s5p_data = r["s5p_data"]
+        tile_layers = r["tile_layers"]
+        clusters = r["clusters"]
+        ndvi_mean = r["ndvi_mean"]
+        ndbi_mean = r["ndbi_mean"]
 
         col_map, col_metrics = st.columns([3, 1], gap="large")
 

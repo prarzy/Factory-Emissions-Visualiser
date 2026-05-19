@@ -1,5 +1,5 @@
 import ee
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from services.utils.gee_auth import ensure_ee_initialized
 from services.gee_sources.indices import compute_ndvi, compute_ndbi, create_industrial_mask
@@ -10,7 +10,7 @@ def fetch_lst(lat: float, lon: float):
 
     point = ee.Geometry.Point(lon, lat)
     region = point.buffer(10_000).bounds()
-    today = datetime.utcnow().date()
+    today = datetime.now(timezone.utc).date()
     start = today - timedelta(days=90)
 
     # Select thermal band plus the surface reflectance bands needed for NDVI/NDBI

@@ -43,8 +43,8 @@ _DEFAULT_DAYS = 90
 
 def _resolve_dates(start_date, end_date):
     if start_date is None or end_date is None:
-        from datetime import datetime, timedelta
-        end = datetime.utcnow().date()
+        from datetime import datetime, timedelta, timezone
+        end = datetime.now(timezone.utc).date()
         start = end - timedelta(days=_DEFAULT_DAYS)
         return start, end
     return start_date, end_date
