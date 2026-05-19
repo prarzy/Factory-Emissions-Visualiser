@@ -64,7 +64,8 @@ def get_ee_tile_url(image, vis_params):
     The returned URL uses ``{z}/{x}/{y}`` placeholders suitable for
     ``folium.TileLayer``.
     """
-    return image.getMapId(vis_params)["tiles_url"]
+    map_id = image.getMapId(vis_params)
+    return map_id["tile_fetcher"].url_format
 
 
 def build_layer_entry(image, vis_params, name, *, opacity=0.6, show=True):

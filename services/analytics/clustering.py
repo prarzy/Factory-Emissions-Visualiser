@@ -52,6 +52,9 @@ def cluster_anomalies(
     labels : np.ndarray
         Cluster label for every entry in *anomaly_indices* (−1 = noise).
     """
+    if len(anomaly_indices) == 0:
+        return [], np.array([], dtype=int)
+
     rows, cols = lst_array.shape
 
     # ---- convert raveled indices to (row, col) pixel coords ----

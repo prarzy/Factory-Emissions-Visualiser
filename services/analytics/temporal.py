@@ -192,8 +192,13 @@ def detect_temporal_anomalies(lat: float, lon: float,
     ]
 
     # ---- array download for metrics ----
-    output = ee.Image.cat([current_lst, z_score, anomaly_flag])
-    output = output.rename(["LST", "Z_Score", "Anomaly"])
+    # Cast all bands to float32 so GEE returns a uniform‑type 3‑D NPY
+    # (avoiding the structured‑array issue from mixed dtypes).
+    output = ee.Image.cat([
+        current_lst.toFloat(),
+        z_score.toFloat(),
+        anomaly_flag.toFloat(),
+    ]).rename(["LST", "Z_Score", "Anomaly"])
 
     url = output.getDownloadURL({
         "scale": 100,
@@ -205,10 +210,29 @@ def detect_temporal_anomalies(lat: float, lon: float,
     resp.raise_for_status()
     data = np.load(io.BytesIO(resp.content))
 
-    lst_array = data[:, :, 0]
-    z_score_map = data[:, :, 1]
-    anomaly_mask = data[:, :, 2] > 0.5
-    anomaly_indices = np.where(anomaly_mask.ravel())[0]
+    # GEE can return multi-band NPY in several shapes depending on the
+    # server-side band types:
+    #   3-D (bands, rows, cols)  – when all bands share the same dtype.
+    #   2-D structured (rows, cols) with named fields – when dtypes differ.
+    if data.ndim == 3 and data.shape[0] == 3:
+        lst_array = np.asarray(data[0], dtype=np.float32)
+        z_score_map = np.asarray(data[1], dtype=np.float32)
+        anomaly_map = np.asarray(data[2], dtype=np.float32)
+    elif data.ndim == 3:
+        lst_array = np.asarray(data[:, :, 0], dtype=np.float32)
+        z_score_map = np.asarray(data[:, :, 1], dtype=np.float32)
+        anomaly_map = np.asarray(data[:, :, 2], dtype=np.float32)
+    elif data.dtype.names:
+        # Structured 2-D array:  (rows, cols) with named bands
+        lst_array = np.asarray(data["LST"], dtype=np.float32)
+        z_score_map = np.asarray(data["Z_Score"], dtype=np.float32)
+        anomaly_map = np.asarray(data["Anomaly"], dtype=np.float32)
+    else:
+        lst_array = np.asarray(data, dtype=np.float32)
+        z_score_map = np.zeros_like(lst_array)
+        anomaly_map = np.zeros_like(lst_array)
+
+    anomaly_indices = np.where((anomaly_map > 0.5).ravel())[0]
 
     return lst_array, anomaly_indices, z_score_map, tile_layers, ndvi_mean, ndbi_mean
 

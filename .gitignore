@@ -43,3 +43,5 @@ key.json
 # Project specific
 *.log
 .ipynb_checkpoints/
+
+.playwright-mcp/
