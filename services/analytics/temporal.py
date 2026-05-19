@@ -145,9 +145,12 @@ def _compute_anomaly_images(lat: float, lon: float,
     hist_mean = hist_stack.reduce(ee.Reducer.mean())
     hist_std = hist_stack.reduce(ee.Reducer.stdDev())
 
-    # ----- Z‑score with division‑by‑zero guard -----
-    z_score = current_lst.subtract(hist_mean).divide(hist_std)
-    z_score = z_score.where(hist_std.eq(0), 0)
+    # ----- Z‑score with division‑by‑zero / tiny‑std guard -----
+    # When hist_std < 0.1 °C the pixel is nearly constant across years;
+    # a large Z from such tiny dispersion would be measurement noise.
+    safe_std = hist_std.max(0.1)
+    z_score = current_lst.subtract(hist_mean).divide(safe_std)
+    z_score = z_score.where(hist_std.lte(0.01), 0)
 
     anomaly_flag = z_score.gt(2)
 
@@ -231,6 +234,10 @@ def detect_temporal_anomalies(lat: float, lon: float,
         lst_array = np.asarray(data, dtype=np.float32)
         z_score_map = np.zeros_like(lst_array)
         anomaly_map = np.zeros_like(lst_array)
+
+    # Guard against inf/-inf from GEE edge cases — replace with NaN
+    for arr in (lst_array, z_score_map, anomaly_map):
+        arr[~np.isfinite(arr)] = np.nan
 
     anomaly_indices = np.where((anomaly_map > 0.5).ravel())[0]
 

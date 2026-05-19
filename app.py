@@ -595,10 +595,14 @@ if st.session_state.show_analysis:
             </div>
             """, unsafe_allow_html=True)
 
+            valid_lst = lst_array[np.isfinite(lst_array)]
+            lst_max = f"{np.max(valid_lst):.2f}" if valid_lst.size else "N/A"
+            lst_min = f"{np.min(valid_lst):.2f}" if valid_lst.size else "N/A"
+            lst_mean = f"{np.mean(valid_lst):.2f}" if valid_lst.size else "N/A"
             st.metric("Anomaly pixels", len(anomaly_indices))
-            st.metric("Max LST (C)", f"{np.nanmax(lst_array):.2f}")
-            st.metric("Min LST (C)", f"{np.nanmin(lst_array):.2f}")
-            st.metric("Mean LST (C)", f"{np.nanmean(lst_array):.2f}")
+            st.metric("Max LST (C)", lst_max)
+            st.metric("Min LST (C)", lst_min)
+            st.metric("Mean LST (C)", lst_mean)
             score, category = calculate_emission_score(
                 z_score_map=z_score_map,
                 anomaly_indices=anomaly_indices,
