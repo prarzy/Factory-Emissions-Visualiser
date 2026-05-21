@@ -28,11 +28,11 @@ def create_industrial_mask(image: ee.Image) -> ee.Image:
 
     Industrial areas are characterised by:
       - low vegetation: NDVI < 0.3
-      - high built-up reflectance: NDBI > 0.2
+      - built-up reflectance: NDBI > 0.0
 
     The caller must have already added NDVI and NDBI bands (e.g. via
     compute_ndvi and compute_ndbi) before passing the image here.
     """
     ndvi = image.select('NDVI')
     ndbi = image.select('NDBI')
-    return ndvi.lt(0.3).And(ndbi.gt(0.2))
+    return ndvi.lt(0.3).And(ndbi.gt(0.0))

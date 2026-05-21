@@ -100,7 +100,7 @@ def _compute_anomaly_images(lat: float, lon: float,
         start_date, end_date = _default_date_range()
 
     # ----- current composite (user‑selected window) -----
-    cur_coll = _build_collection(start_date, end_date, region)
+    cur_coll = _build_collection(start_date, end_date, region, include_l8=True)
     if cur_coll.size().getInfo() == 0:
         raise RuntimeError(
             f"No cloud‑free Landsat scenes for {start_date} – {end_date}."
@@ -141,14 +141,13 @@ def _compute_anomaly_images(lat: float, lon: float,
     hist_mean = hist_stack.reduce(ee.Reducer.mean())
     hist_std = hist_stack.reduce(ee.Reducer.stdDev())
 
-    # ----- Z‑score with division‑by‑zero / tiny‑std guard -----
-    # When hist_std < 0.1 °C the pixel is nearly constant across years;
-    # a large Z from such tiny dispersion would be measurement noise.
-    safe_std = hist_std.max(0.1)
+    # ----- Z‑score with division‑by‑zero guard -----
+    # Clamp hist_std to 0.05 °C minimum to avoid division‑by‑zero while
+    # still allowing moderate anomalies to register.
+    safe_std = hist_std.max(0.05)
     z_score = current_lst.subtract(hist_mean).divide(safe_std)
-    z_score = z_score.where(hist_std.lte(0.01), 0)
 
-    anomaly_flag = z_score.gt(2)
+    anomaly_flag = z_score.gt(1.5)
 
     return current_lst, z_score, anomaly_flag, region, ndvi_mean, ndbi_mean
 
