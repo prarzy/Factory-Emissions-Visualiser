@@ -2,6 +2,7 @@ import numpy as np
 import streamlit as st
 from datetime import date, datetime, timedelta, timezone
 from streamlit_folium import st_folium
+import folium
 
 from services.analytics.temporal import detect_temporal_anomalies
 from services.analytics.fusion import calculate_emission_score
@@ -51,6 +52,14 @@ if "show_analysis" not in st.session_state:
     st.session_state.show_analysis = False
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = None
+if "select_on_map" not in st.session_state:
+    st.session_state.select_on_map = False
+if "picker_click" not in st.session_state:
+    st.session_state.picker_click = None
+if "picker_lat" not in st.session_state:
+    st.session_state.picker_lat = None
+if "picker_lon" not in st.session_state:
+    st.session_state.picker_lon = None
 
 
 st.set_page_config(
@@ -361,14 +370,20 @@ with st.sidebar:
     
     st.markdown("---")
     
+    default_lat = st.session_state.get("picker_lat") or 20.95150000
+    default_lon = st.session_state.get("picker_lon") or 85.2157
+
     col1, col2 = st.columns(2, gap="small")
     with col1:
-        lat = st.number_input("Latitude", value=20.95150000, format="%.8f", 
-                             help="Decimal degrees")
+        lat = st.number_input("Latitude", value=default_lat, format="%.8f",
+                             key="lat_input", help="Decimal degrees")
     with col2:
-        lon = st.number_input("Longitude", value=85.2157, format="%.8f",
-                             help="Decimal degrees")
-    
+        lon = st.number_input("Longitude", value=default_lon, format="%.8f",
+                             key="lon_input", help="Decimal degrees")
+
+    st.checkbox("Select on Map", key="select_on_map",
+                help="Open an interactive map to click-set coordinates")
+
     st.markdown("---")
 
     st.markdown("""
@@ -427,6 +442,37 @@ with st.sidebar:
         </ul>
     </div>
     """, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Coordinate picker map  (overrides the main area when toggled)
+# ---------------------------------------------------------------------------
+if st.session_state.select_on_map:
+    st.markdown("""
+    <div style="padding: 12px 0 4px 0;">
+        <h3 style="color: #8a9a8a; font-size: 11px; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: 'JetBrains Mono', monospace;">
+            Click any location on the map
+        </h3>
+    </div>
+    """, unsafe_allow_html=True)
+
+    cur_lat = st.session_state.get("lat_input", 20.9515)
+    cur_lon = st.session_state.get("lon_input", 85.2157)
+
+    m_picker = folium.Map(location=[cur_lat, cur_lon], zoom_start=12, control_scale=True)
+    folium.Marker([cur_lat, cur_lon], tooltip="Selected").add_to(m_picker)
+
+    map_data = st_folium(m_picker, width=1400, height=500, key="picker_map")
+
+    if map_data and map_data.get("last_clicked"):
+        clicked = map_data["last_clicked"]
+        prev = st.session_state.get("picker_click")
+        if prev is None or prev["lat"] != clicked["lat"] or prev["lng"] != clicked["lng"]:
+            st.session_state.picker_lat = round(clicked["lat"], 6)
+            st.session_state.picker_lon = round(clicked["lng"], 6)
+            st.session_state.picker_click = clicked
+            st.rerun()
+
+    st.stop()
 
 # Home page content
 if not st.session_state.show_analysis:
@@ -597,75 +643,101 @@ if st.session_state.show_analysis:
         ndvi_mean = r["ndvi_mean"]
         ndbi_mean = r["ndbi_mean"]
 
-        col_map, col_metrics = st.columns([3, 1], gap="large")
+        # ----- Pipeline status -----
+        st.markdown(f"""
+        <div style="display: flex; gap: 8px; align-items: center; padding: 12px 0; margin-bottom: 8px; border-bottom: 1px solid #2e3d2e;">
+            <span style="font-size: 10px; color: #6b8f5e; font-family: 'JetBrains Mono', monospace; letter-spacing: 0.1em; text-transform: uppercase;">Pipeline</span>
+            <span style="color: #6b8f5e; font-size: 11px; font-family: 'JetBrains Mono', monospace;">GEE Fetch ✓</span>
+            <span style="color: #5a6a5a;">→</span>
+            <span style="color: #6b8f5e; font-size: 11px; font-family: 'JetBrains Mono', monospace;">Thermal Anomaly ✓</span>
+            <span style="color: #5a6a5a;">→</span>
+            <span style="color: #6b8f5e; font-size: 11px; font-family: 'JetBrains Mono', monospace;">S5P Composition ✓</span>
+            <span style="color: #5a6a5a;">→</span>
+            <span style="color: #6b8f5e; font-size: 11px; font-family: 'JetBrains Mono', monospace;">Clustering ✓</span>
+            <span style="color: #5a6a5a;">→</span>
+            <span style="color: #6b8f5e; font-size: 11px; font-family: 'JetBrains Mono', monospace;">Emission Score ✓</span>
+            <span style="margin-left: auto; font-size: 10px; color: #5a6a5a; font-family: 'JetBrains Mono', monospace;">
+                {st.session_state.lat:.4f}, {st.session_state.lon:.4f}
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
 
-        with col_map:
-            m = create_map(
-                st.session_state.lat, st.session_state.lon,
-                tile_layers=tile_layers,
-                clusters=clusters,
-            )
-            st_folium(m, width=1100, height=600)
+        valid_lst = lst_array[np.isfinite(lst_array)]
+        lst_max = f"{np.max(valid_lst):.2f}" if valid_lst.size else "N/A"
+        lst_min = f"{np.min(valid_lst):.2f}" if valid_lst.size else "N/A"
+        lst_mean = f"{np.mean(valid_lst):.2f}" if valid_lst.size else "N/A"
+        score, category = calculate_emission_score(
+            z_score_map=z_score_map,
+            anomaly_indices=anomaly_indices,
+            s5p_data=s5p_data,
+            clusters=clusters,
+            ndvi_mean=ndvi_mean,
+            ndbi_mean=ndbi_mean,
+        )
 
-        with col_metrics:
-            st.markdown("""
-            <div style="padding-bottom: 8px; margin-bottom: 16px;">
-                <h3 style='color: #6b8f5e; font-size: 16px; margin: 0; font-weight: 600; letter-spacing: -0.2px; font-family: "DM Sans", sans-serif;'>Results</h3>
-            </div>
-            """, unsafe_allow_html=True)
+        # ----- Metrics row (top) -----
+        cols = st.columns(7, gap="small")
+        cols[0].metric("Anomaly pixels", len(anomaly_indices))
+        cols[1].metric("Max LST (°C)", lst_max)
+        cols[2].metric("Min LST (°C)", lst_min)
+        cols[3].metric("Mean LST (°C)", lst_mean)
+        cols[4].metric("Emission Score", f"{score:.1f}", delta=category)
+        cols[5].metric("Hotspots", len(clusters) if clusters else 0)
+        if clusters:
+            total_area = sum(c['area_km2'] for c in clusters)
+            cols[6].metric("Combined area", f"{total_area:.2f} km²")
+        else:
+            cols[6].metric("Combined area", "—")
 
-            valid_lst = lst_array[np.isfinite(lst_array)]
-            lst_max = f"{np.max(valid_lst):.2f}" if valid_lst.size else "N/A"
-            lst_min = f"{np.min(valid_lst):.2f}" if valid_lst.size else "N/A"
-            lst_mean = f"{np.mean(valid_lst):.2f}" if valid_lst.size else "N/A"
-            st.metric("Anomaly pixels", len(anomaly_indices))
-            st.metric("Max LST (C)", lst_max)
-            st.metric("Min LST (C)", lst_min)
-            st.metric("Mean LST (C)", lst_mean)
-            score, category = calculate_emission_score(
-                z_score_map=z_score_map,
-                anomaly_indices=anomaly_indices,
-                s5p_data=s5p_data,
-                clusters=clusters,
-                ndvi_mean=ndvi_mean,
-                ndbi_mean=ndbi_mean,
-            )
-            st.metric(
-                "Emission Score",
-                value=f"{score:.1f}",
-                delta=category,
-            )
+        # ----- Large map -----
+        m = create_map(
+            st.session_state.lat, st.session_state.lon,
+            tile_layers=tile_layers,
+            clusters=clusters,
+        )
+        st_folium(m, width=1400, height=650)
 
+        # ----- Secondary panels -----
+        col_bottom_left, col_bottom_right = st.columns(2, gap="large")
+
+        with col_bottom_left:
             if clusters:
                 st.markdown("""
-                <div style="padding-top: 24px; padding-bottom: 8px;">
-                    <h3 style='color: #8a9a8a; font-size: 11px; margin: 0; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: "JetBrains Mono", monospace;'>Hotspot Clusters</h3>
+                <div style="padding-bottom: 8px;">
+                    <h3 style='color: #8a9a8a; font-size: 11px; margin: 0 0 8px 0; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: "JetBrains Mono", monospace;'>Hotspot Clusters</h3>
                 </div>
                 """, unsafe_allow_html=True)
 
-                st.metric("Total hotspots", len(clusters))
-                top = clusters[0]
-                st.metric("Largest cluster", f"{top['size']} px", help=f"Z̅={top['mean_z_score']} · {top['area_km2']} km²")
-                total_area = sum(c['area_km2'] for c in clusters)
-                st.metric("Combined area", f"{total_area:.2f} km²")
+                for c in clusters:
+                    st.markdown(f"""
+                    <div style="padding: 6px 0; display: flex; justify-content: space-between; border-bottom: 1px solid #1e2e1e; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+                        <span style="color: #8a9a8a;">Cluster #{c['cluster_id']}</span>
+                        <span style="color: #e8e6e1;">{c['size']} px · Z̅={c['mean_z_score']:.1f} · {c['area_km2']} km²</span>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                st.info("No hotspot clusters identified.")
 
+        with col_bottom_right:
             if s5p_data:
                 st.markdown("""
-                <div style="padding-top: 24px; padding-bottom: 8px;">
-                    <h3 style='color: #8a9a8a; font-size: 11px; margin: 0; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: "JetBrains Mono", monospace;'>Atmospheric Composition</h3>
+                <div style="padding-bottom: 8px;">
+                    <h3 style='color: #8a9a8a; font-size: 11px; margin: 0 0 8px 0; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: "JetBrains Mono", monospace;'>Atmospheric Composition</h3>
                 </div>
                 """, unsafe_allow_html=True)
 
                 for poll, data in s5p_data.items():
-                    mean_val = data['mean']
-                    st.metric(
-                        data['label'],
-                        f"{mean_val:.3e}",
-                        help=f"Mean column density · {data['unit']}",
-                    )
+                    st.markdown(f"""
+                    <div style="padding: 6px 0; display: flex; justify-content: space-between; border-bottom: 1px solid #1e2e1e; font-family: 'JetBrains Mono', monospace; font-size: 11px;">
+                        <span style="color: #8a9a8a;">{data['label']}</span>
+                        <span style="color: #e8e6e1;">{data['mean']:.3e} {data['unit']}</span>
+                    </div>
+                    """, unsafe_allow_html=True)
 
                 st.markdown("""
                 <div style="margin-top: 8px; font-size: 10px; color: #5a6a5a; font-family: 'JetBrains Mono', monospace;">
                     Sentinel‑5P TROPOMI · ~7 km native resolution
                 </div>
                 """, unsafe_allow_html=True)
+            else:
+                st.info("No atmospheric composition data available.")
