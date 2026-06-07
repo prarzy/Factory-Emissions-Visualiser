@@ -45,7 +45,7 @@ Flow: user enters lat/lon → `temporal.detect_temporal_anomalies` queries GEE f
 ## Key Constraints
 
 - **No test, lint, build, or CI commands exist.** The only verification is running the app.
-- **Earth Engine auth** uses `key.json` (service account credentials). This file is in `.gitignore` and not tracked — if it's missing, the app won't start. Do not regenerate or rotate it without updating the GCP project (`careful-drummer-462304-u9`).
+- **Earth Engine auth** uses `key.json` (service account credentials) plus `GEE_SERVICE_ACCOUNT` and `GEE_PROJECT_ID` environment variables. The key file is in `.gitignore` and not tracked — if it's missing, the app won't start.
 - Default coordinates hardcoded in `app.py`: lat=20.9515, lon=85.2157 (Odisha industrial belt).
 - Sidebar date inputs let users set the analysis time window (defaults to last 90 days). Changing dates triggers a fresh GEE pipeline via `st.cache_data` keyed on `(lat, lon, start_iso, end_iso)`.
 - `st.cache_data(ttl=3600)` wraps the full pipeline (`detect_temporal_anomalies` + S5P + clustering) in `app._run_analysis`. The cache auto-invalidates when lat/lon or date changes, avoiding redundant GEE calls on Streamlit reruns.

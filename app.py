@@ -56,10 +56,8 @@ if "select_on_map" not in st.session_state:
     st.session_state.select_on_map = False
 if "picker_click" not in st.session_state:
     st.session_state.picker_click = None
-if "picker_lat" not in st.session_state:
-    st.session_state.picker_lat = None
-if "picker_lon" not in st.session_state:
-    st.session_state.picker_lon = None
+if "picker_coords" not in st.session_state:
+    st.session_state.picker_coords = {"lat": 20.9515, "lon": 85.2157}
 
 
 st.set_page_config(
@@ -370,16 +368,13 @@ with st.sidebar:
     
     st.markdown("---")
     
-    default_lat = st.session_state.get("picker_lat") or 20.95150000
-    default_lon = st.session_state.get("picker_lon") or 85.2157
-
     col1, col2 = st.columns(2, gap="small")
     with col1:
-        lat = st.number_input("Latitude", value=default_lat, format="%.8f",
-                             key="lat_input", help="Decimal degrees")
+        lat = st.number_input("Latitude", value=st.session_state.picker_coords["lat"],
+                             format="%.8f", help="Decimal degrees")
     with col2:
-        lon = st.number_input("Longitude", value=default_lon, format="%.8f",
-                             key="lon_input", help="Decimal degrees")
+        lon = st.number_input("Longitude", value=st.session_state.picker_coords["lon"],
+                             format="%.8f", help="Decimal degrees")
 
     st.checkbox("Select on Map", key="select_on_map",
                 help="Open an interactive map to click-set coordinates")
@@ -446,7 +441,7 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Coordinate picker map  (overrides the main area when toggled)
 # ---------------------------------------------------------------------------
-if st.session_state.select_on_map:
+if st.session_state.select_on_map and not st.session_state.show_analysis:
     st.markdown("""
     <div style="padding: 12px 0 4px 0;">
         <h3 style="color: #8a9a8a; font-size: 11px; font-weight: 600; letter-spacing: 0.15em; text-transform: uppercase; font-family: 'JetBrains Mono', monospace;">
@@ -455,22 +450,28 @@ if st.session_state.select_on_map:
     </div>
     """, unsafe_allow_html=True)
 
-    cur_lat = st.session_state.get("lat_input", 20.9515)
-    cur_lon = st.session_state.get("lon_input", 85.2157)
+    pc = st.session_state.picker_coords
+    m_picker = folium.Map(location=[pc["lat"], pc["lon"]], zoom_start=5, control_scale=True)
 
-    m_picker = folium.Map(location=[cur_lat, cur_lon], zoom_start=12, control_scale=True)
-    folium.Marker([cur_lat, cur_lon], tooltip="Selected").add_to(m_picker)
+    # Show marker only if user has clicked at least once
+    if st.session_state.get("picker_click"):
+        folium.CircleMarker(
+            [pc["lat"], pc["lon"]], radius=6, color="#ff0000", fill=True,
+            fill_opacity=0.9, tooltip="Selected Location"
+        ).add_to(m_picker)
 
+    folium.LatLngPopup().add_to(m_picker)
     map_data = st_folium(m_picker, width=1400, height=500, key="picker_map")
 
-    if map_data and map_data.get("last_clicked"):
-        clicked = map_data["last_clicked"]
-        prev = st.session_state.get("picker_click")
-        if prev is None or prev["lat"] != clicked["lat"] or prev["lng"] != clicked["lng"]:
-            st.session_state.picker_lat = round(clicked["lat"], 6)
-            st.session_state.picker_lon = round(clicked["lng"], 6)
-            st.session_state.picker_click = clicked
-            st.rerun()
+    if map_data:
+        clicked = map_data.get("last_clicked")
+        if clicked and clicked.get("lat") is not None and clicked.get("lng") is not None:
+            prev = st.session_state.get("picker_click")
+            if prev is None or prev["lat"] != clicked["lat"] or prev["lng"] != clicked["lng"]:
+                st.session_state.picker_coords["lat"] = round(clicked["lat"], 6)
+                st.session_state.picker_coords["lon"] = round(clicked["lng"], 6)
+                st.session_state.picker_click = {"lat": clicked["lat"], "lng": clicked["lng"]}
+                st.rerun()
 
     st.stop()
 
