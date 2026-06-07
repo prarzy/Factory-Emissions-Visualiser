@@ -26,8 +26,8 @@ weighted rules.
 
 ## Overview
 
-Given a latitude and longitude (defaulting to the Odisha industrial belt at 20.9515° N,
-85.2157° E), the tool:
+Given a latitude and longitude (defaulting to RVCE, Bengaluru at 12.9235° N,
+77.4986° E), the tool:
 
 1. Queries **Landsat 8/9** surface temperature over the user-defined date window.
 2. Builds a historical climatology from the same calendar dates across the preceding
@@ -395,8 +395,7 @@ All weights are configurable constants in `services/analytics/fusion.py:26-33`.
 - **Clustering is approximate.** Geographic coordinates are derived from pixel positions
   assuming a uniform 0.05° span — sufficient for a 20 km analysis tile, but not
   survey-grade.
-- **Default coordinates** are hardcoded to 20.9515° N, 85.2157° E (industrial belt near
-  Angul/Talcher, Odisha, India). Change the defaults in `app.py:62-63` if needed.
+- **Default coordinates** are hardcoded to 12.9235° N, 77.4986° E (RVCE, Bengaluru, India). Change in `app.py:60` if needed.
 - **`requirements.txt` is UTF-16 LE encoded.** Standard `pip install -r requirements.txt`
   will fail. Convert to UTF-8 first, or use the install command above.
 - **Several files are empty placeholders:** `baselines.py`, `masking.py`, `timeslider.py`.

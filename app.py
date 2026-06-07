@@ -57,7 +57,7 @@ if "select_on_map" not in st.session_state:
 if "picker_click" not in st.session_state:
     st.session_state.picker_click = None
 if "picker_coords" not in st.session_state:
-    st.session_state.picker_coords = {"lat": 20.9515, "lon": 85.2157}
+    st.session_state.picker_coords = {"lat": 12.9235, "lon": 77.4986}
 
 
 st.set_page_config(
